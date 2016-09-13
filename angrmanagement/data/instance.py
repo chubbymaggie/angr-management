@@ -2,13 +2,14 @@ import pickle
 from threading import Thread
 from Queue import Queue
 
-from atom.api import Atom, Int, List, Typed, Value
+from atom.api import Atom, Int, List, Typed, Value, Dict
 from enaml.application import schedule
 
 import ana
-from angr import CFG, PathGroup, Project
+from angr import CFG, PathGroup, Project, PathHierarchy
 
 from .jobs import Job
+from .registry import Registry
 
 class PathGroups(Atom):
     proj = Typed(Project)
@@ -16,7 +17,8 @@ class PathGroups(Atom):
 
     def add_path_group(self, pg=None):
         if pg is None:
-            pg = self.proj.factory.path_group(immutable=False, strong_path_mapping=True)
+            hierarchy = PathHierarchy(weakkey_path_mapping=True)
+            pg = self.proj.factory.path_group(immutable=False, hierarchy=hierarchy)
         self.groups = self.groups + [pg]
 
 class Instance(Atom):
@@ -25,6 +27,9 @@ class Instance(Atom):
     path_groups = Typed(PathGroups)
     cfg = Typed(CFG)
     jobs = List(Job)
+    vfgs = Dict()
+    registry = Typed(Registry, factory=Registry)
+
     _jobs_queue = Value()
 
     def __init__(self, **kwargs):
@@ -36,8 +41,6 @@ class Instance(Atom):
 
         if self.path_groups is None:
             self.path_groups = PathGroups(proj=self.proj)
-            # ehhhhhh let's create one by default because i like to be lazy
-            self.path_groups.add_path_group()
 
         self._start_worker()
 
@@ -49,7 +52,7 @@ class Instance(Atom):
         self._jobs_queue.put(job)
 
     def _start_worker(self):
-        t = Thread(target=self._worker, name='Angr Management Worker Thread')
+        t = Thread(target=self._worker, name='angr Management Worker Thread')
         t.daemon = True
         t.start()
 

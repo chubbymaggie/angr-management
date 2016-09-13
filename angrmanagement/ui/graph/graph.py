@@ -1,6 +1,7 @@
 import itertools
 import functools
 import time
+from collections import defaultdict
 
 import pygraphviz
 
@@ -11,13 +12,9 @@ from enaml.core.declarative import d_
 from enaml.qt.QtGui import QGraphicsScene, QGraphicsView, QPainterPath, QPainter
 from enaml.qt.QtCore import QPointF, QRectF, Qt, QSize
 from enaml.qt.qt_frame import QtFrame
-from enaml.qt.qt_factories import QT_FACTORIES
 from enaml.qt.qt_container import QtContainer
 
-def grouper(iterable, n, fillvalue=None):
-    "Collect data into fixed-length chunks or blocks"
-    args = [iter(iterable)] * n
-    return itertools.izip_longest(*args, fillvalue=fillvalue)
+from .utils import grouper
 
 
 class ZoomingGraphicsView(QGraphicsView):
@@ -48,6 +45,7 @@ class ZoomingGraphicsView(QGraphicsView):
         else:
             super(ZoomingGraphicsView, self).wheelEvent(event)
 
+
 class ProxyGraph(ProxyFrame):
     declaration = ForwardTyped(lambda: Graph)
 
@@ -55,8 +53,11 @@ class ProxyGraph(ProxyFrame):
 class QtGraph(QtFrame, ProxyGraph):
     widget = Typed(QGraphicsView)
     scene = Typed(QGraphicsScene)
-    _proxies = Dict()
+    _proxies = {}
     _edge_paths = List()
+
+    LEFT_PADDING = 1200
+    TOP_PADDING = 1200
 
     def create_widget(self):
         self.scene = QGraphicsScene(self.parent_widget())
@@ -124,9 +125,7 @@ class QtGraph(QtFrame, ProxyGraph):
         for from_, to in self.declaration.edges:
             g.add_edge(from_, to)
 
-        before = time.time()
         g.layout(prog='dot')
-        after = time.time()
 
         for child in self.children():
             if not isinstance(child, QtContainer):
@@ -154,6 +153,16 @@ class QtGraph(QtFrame, ProxyGraph):
 
             self._edge_paths.append(self.scene.addPath(painter))
 
+        rect = self.scene.itemsBoundingRect()
+        # Enlarge the rect so there is enough room at right and bottom
+        rect.setX(rect.x() - self.LEFT_PADDING)
+        rect.setY(rect.y() - self.TOP_PADDING)
+        rect.setWidth(rect.width() + 2 * self.LEFT_PADDING)
+        rect.setHeight(rect.height() + 2 * self.TOP_PADDING)
+
+        self.scene.setSceneRect(rect)
+        self.widget.viewport().update()
+
         self.show_selected()
 
     def minimumSizeHint(self):
@@ -165,9 +174,6 @@ class QtGraph(QtFrame, ProxyGraph):
             if isinstance(child, QtContainer) and child.declaration is not None and child.declaration.name == self.declaration.selected:
                 self.widget.ensureVisible(proxy)
                 break
-
-QT_FACTORIES['Graph'] = lambda: QtGraph
-
 
 class Graph(Frame):
     #: The edges (as names) of the Graph

@@ -1,24 +1,47 @@
 import textwrap
 
 from enaml.core.api import Conditional, Looper
-from enaml.layout.api import vbox
+from enaml.layout.api import vbox, align
 from enaml.widgets.api import DockItem, Container, Label, PushButton, MultilineField
+from enaml.widgets.timer import Timer
 
 from angr.errors import AngrError
 
-from .graph import Graph
+from .block import Block
+from .graph import FlowGraph, to_supergraph
 from .notify import notify_update
 from .wkitem import WorkspaceItem
 from ..data.jobs import CFGGenerationJob
 
 
-enamldef CFGNode(Container):
+# enamldef CFGNode(Container):
+#     attr proj
+#     attr node
+
+#     Label:
+#         font = '10pt Courier'
+#         text = str(get_block(proj, node).capstone) if not proj.is_hooked(node) else str(proj._sim_procedures[node][0].__name__)
+
+def get_header(node, func_addr):
+    if node.addr == func_addr:
+        return "sub_%#x:" % func_addr
+    else:
+        return "loc_%#x:" % node.addr
+
+enamldef CFGNode(Container): cfgnode:
     attr proj
     attr node
+    attr addr
+    attr func_addr
+    attr state = None
 
-    Label:
-        font = '10pt Courier'
-        text = str(get_block(proj, node).capstone) if not proj.is_hooked(node) else str(proj._sim_procedures[node][0].__name__)
+    Conditional:
+        condition << not proj.is_hooked(node)
+
+        Block:
+            blocks << [ proj.factory.block(n.addr) for n in node.cfg_nodes ]
+            header << get_header(node, func_addr)
+            state << cfgnode.state
 
 def get_block(proj, address):
     try:
@@ -30,6 +53,16 @@ def get_block(proj, address):
 def edge_qualifies(data):
     return data['type'] not in ('call', 'return_from_call')
 
+def find_vfg_state(wk, func_addr, block_addr):
+    vfg = wk.inst.vfgs.get(func_addr, None)
+    if vfg is None:
+        return None
+
+    try:
+        return next(node.final_states[0] for node in vfg._graph.nodes() if node.addr == block_addr)
+    except StopIteration:
+        return None
+
 enamldef CFGItem(WorkspaceItem): cfgi:
     title = "CFG"
 
@@ -37,28 +70,51 @@ enamldef CFGItem(WorkspaceItem): cfgi:
         condition << wk.selected_function is not None
 
         Container:
-            constraints = [vbox(graph)]
+            constraints << [
+                vbox(graph),
+                (width == 500) | 'weak'
+                ]
 
-            Graph: graph:
-                edges << [(str(from_), str(to)) for (from_, to, data) in wk.selected_function.transition_graph.edges(data=True) if edge_qualifies(data)]
+            FlowGraph: graph:
+                func_addr << int(wk.selected_function.addr)
+                supergraph << to_supergraph(wk.selected_function.graph)
+                selected << str(wk.selected_function.addr)
+                edges << [ (str(from_.addr), str(to.addr)) for (from_, to, data) in supergraph.edges(data=True) if edge_qualifies(data) ]
+
+                func_addr :: refresh_timer.start()
 
                 Looper:
-                    iterable << wk.selected_function.blocks
+                    iterable << supergraph.nodes()
+                    iterable ::
+                        refresh_timer.start()
 
                     Conditional:
                         condition << loop_item != 0
 
                         CFGNode:
-                            name << str(loop_item)
+                            name << str(loop_item.addr)
+                            addr << loop_item.addr
                             node << loop_item
+                            func_addr << wk.selected_function.addr
                             proj = wk.proj
+                            state << find_vfg_state(wk, wk.selected_function.addr, loop_item)
+
+            Timer: refresh_timer:
+                interval = 30
+                single_shot = True
+                timeout ::
+                    graph.request_relayout()
 
     Conditional:
         condition << wk.inst.cfg is None
 
-        Container:
-            constraints = []
+        Container: container:
+            constraints = [
+                align('h_center', container, cmd_gencfg),
+                align('v_center', container, cmd_gencfg),
+                (width == 500) | 'weak',
+            ]
 
-            PushButton:
+            PushButton: cmd_gencfg:
                 text = "Generate CFG"
                 clicked :: wk.inst.add_job(CFGGenerationJob())

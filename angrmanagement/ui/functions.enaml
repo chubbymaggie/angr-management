@@ -1,15 +1,70 @@
-from enaml.widgets.api import Container
+from enaml.core.api import Conditional
+from enaml.widgets.api import Container, Form, Label, PushButton
+from enaml.layout.api import vbox, spacer
 
-from .listcontrol import QtListControl
+from .function_table import FunctionTableControl
 from .wkitem import WorkspaceItem
+from ..data.jobs import VFGGenerationJob
 
 enamldef FunctionManagerItem(WorkspaceItem): fmi:
     title = "Function Manager"
 
     Container:
-        QtListControl: selector:
-            items << wk.inst.cfg.function_manager.functions.values() if wk.inst.cfg else []
-            to_string = repr
+        constraints << [
+            vbox(selector, fattributes),
+            (width == 200) | 'weak',
+            ]
+
+        FunctionTableControl: selector:
+            hug_height = 'weak'
+            hug_width = 'ignore'
+            column_count = 4
+            header_labels = [ 'Name', 'Start address', 'Size', 'Basic blocks' ]
+
+            items << sorted(wk.inst.cfg.kb.functions.values(), key=lambda f: f.addr) if wk.inst.cfg else []
             on_selected ::
                 wk.selected_function
                 wk.selected_function = selector.selected_item
+
+        Container: fattributes:
+
+                Container:
+                    constraints = [vbox(attrs, run_vsa, run_ddg)]
+
+                    Form: attrs:
+                        Label:
+                            text = "Returning"
+                        Label:
+                            text << str(wk.selected_function.returning) if wk.selected_function else ""
+
+                        Label:
+                            text = "Argument Registers:"
+                        Label:
+                            text << str(wk.selected_function._argument_registers) if wk.selected_function else ""
+
+                        Label:
+                            text = "Arguments on Stack:"
+                        Label:
+                            text << str(wk.selected_function._argument_stack_variables) if wk.selected_function else ""
+
+                        Label:
+                            text = "SP difference:"
+                        Label:
+                            text << '%#x' % wk.selected_function.sp_delta if wk.selected_function else ""
+
+                        Label:
+                            text = "Endpoints"
+                        Label:
+                            text << "[ " + ",".join("%#08x" % i.addr for i in wk.selected_function.endpoints) + " ]" if wk.selected_function else ""
+
+                    PushButton: run_vsa:
+                        text = "Run VSA"
+                        clicked ::
+                            wk.inst.add_job(VFGGenerationJob(wk.selected_function._addr))
+
+                    PushButton: run_ddg:
+                        text = "Run VSA_DDG"
+                        # enabled << wk.selected_function._addr in wk.inst.vfgs
+                        enabled = True
+                        clicked ::
+                            wk.inst.add_job(DDGGenerationJob(wk.selected_function._addr))
